@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>夢遊大冒險：星夜歸途</title>
+    <style>
+        body {
+            overscroll-behavior: none;
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a2e;
+            color: white;
+            font-family: 'Microsoft JhengHei', sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            max-width: 100vw;
+            border-radius: 0; /* 直向滿版更像手遊；想保留圓角可刪掉 */
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            border: 4px solid #4a4e69;
+            border-radius: 8px;
+            background: linear-gradient(to bottom, #0f2027, #203a43, #2c5364); /* 星空背景 */
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: auto;
+            touch-action: none; /* iPhone: 避免滑動/縮放手勢干擾 */
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .screen {
+            background: rgba(0, 0, 0, 0.85);
+            padding: 2.5rem;
+            border-radius: 15px;
+            text-align: center;
+            pointer-events: auto;
+            display: none;
+            border: 2px solid #ffd700;
+            min-width: 300px;
+        }
+
+        h1 {
+            color: #ffd700;
+            text-shadow: 2px 2px 4px #000;
+            margin-bottom: 0.5rem;
+            font-size: 2.5rem;
+        }
+
+        p {
+            font-size: 1.2rem;
+            color: #e0e0e0;
+            margin-bottom: 2rem;
+            line-height: 1.6;
+        }
+
+        button {
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 1.5rem;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.1s, background 0.2s;
+            font-family: 'Microsoft JhengHei', sans-serif;
+            font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        button:hover {
+            background: #ff5252;
+            transform: scale(1.05);
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        .highlight {
+            color: #4ecdc4;
+            font-weight: bold;
+        }
+
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 1.1rem;
+            font-weight: bold;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px #000;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .sub-text {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.6);
+            font-weight: normal;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="800" height="450"></canvas>
+    
+    <div id="hud">
+        <div id="level-indicator">Level 1</div>
+        <div class="sub-text">觀察游標，點擊物品鋪路</div>
+    </div>
+
+    <div id="ui-layer">
+        <!-- 開始畫面 -->
+        <div id="start-screen" class="screen" style="display: block;">
+            <h1>夢遊大冒險</h1>
+            <p>夢遊先生又睡著走出門了！<br>點擊環境中的物品（橋、風扇、升降梯）<br>幫助他安全回家。</p>
+            <button onclick="game.startGame()">開始遊戲</button>
+        </div>
+
+        <!-- 失敗畫面 -->
+        <div id="gameover-screen" class="screen">
+            <h1 style="color: #ff6b6b;">哎呀！</h1>
+            <p id="death-reason">夢遊先生醒來了...</p>
+            <button onclick="game.resetLevel()">重試本關</button>
+        </div>
+
+        <!-- 關卡完成畫面 -->
+        <div id="level-complete-screen" class="screen">
+            <h1 style="color: #4ecdc4;">安全抵達！</h1>
+            <p>夢遊先生通過了這個區域。</p>
+            <button onclick="game.nextLevel()">下一關</button>
+        </div>
+
+        <!-- 全破畫面 -->
+        <div id="victory-screen" class="screen">
+            <h1 style="color: #f1c40f;">恭喜通關！</h1>
+            <p>夢遊先生終於回到溫暖的床上了。<br>今晚是個好夢。</p>
+            <button onclick="game.startGame()">從頭開始</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    class Game {
+        constructor() {
+            this.canvas = document.getElementById('gameCanvas');
+            this.ctx = this.canvas.getContext('2d');
+            this.baseW = 800;
+            this.baseH = 450;
+            this.width = this.baseW;
+            this.height = this.baseH;
+            
+            this.state = 'MENU'; 
+            this.lastTime = 0;
+            this.currentLevel = 1;
+            this.maxLevels = 3;
+            
+            this.camera = { x: 0, y: 0 };
+            this.worldWidth = 2000;
+
+            this.mouseX = 0;
+            this.mouseY = 0;
+            
+            this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+            this.canvas.addEventListener('mousedown', (e) => this.handleClick(e));
+            
+            this.walker = null;
+            this.platforms = [];
+            this.interactables = [];
+            this.decorations = [];
+            
+            this.initDecorations();
+
+            // iPhone 直向：自動縮放 + 讓畫面不糊
+            this.resizeCanvas();
+            window.addEventListener('resize', () => this.resizeCanvas());
+            window.addEventListener('orientationchange', () => this.resizeCanvas());
+            
+            requestAnimationFrame((time) => this.loop(time));
+        }
+
+        initDecorations() {
+            this.decorations = [];
+            // 星星
+            for(let i=0; i<80; i++) {
+                this.decorations.push({
+                    type: 'star',
+                    x: Math.random() * this.width, 
+                    y: Math.random() * this.height * 0.8,
+                    size: Math.random() * 2 + 1,
+                    blinkSpeed: Math.random() * 0.05 + 0.01,
+                    alpha: Math.random()
+                });
+            }
+            // 月亮
+            this.decorations.push({
+                type: 'moon',
+                x: 720,
+                y: 60,
+                size: 30
+            });
+        }
+
+        startGame() {
+            this.currentLevel = 1;
+            this.loadLevel(this.currentLevel);
+        }
+
+        nextLevel() {
+            this.currentLevel++;
+            if (this.currentLevel > this.maxLevels) {
+                // 照理說不會執行到這，因為在 win logic 會判斷
+                this.currentLevel = 1; 
+            }
+            this.loadLevel(this.currentLevel);
+        }
+
+        resetLevel() {
+            this.loadLevel(this.currentLevel);
+        }
+
+        loadLevel(level) {
+            this.state = 'PLAYING';
+            this.hideAllScreens();
+            document.getElementById('level-indicator').innerText = `Level ${level}`;
+            
+            this.camera.x = 0;
+            this.walker = {
+                x: 50,
+                y: 200, // 稍微高一點，避免卡地
+                width: 20,
+                height: 40,
+                vx: 1.8, // 稍微快一點
+                vy: 0,
+                grounded: true,
+                state: 'WALKING', 
+                animFrame: 0,
+                facingRight: true,
+                alpha: 1.0
+            };
+
+            this.platforms = [];
+            this.interactables = [];
+            this.worldWidth = 2000; // 預設
+
+            // --- 關卡配置 ---
+            if (level === 1) {
+                this.setupLevel1();
+            } else if (level === 2) {
+                this.setupLevel2();
+            } else if (level === 3) {
+                this.setupLevel3();
+            }
+        }
+
+        setupLevel1() {
+            // Level 1: 基礎教學 (橋、風扇、蓋子)
+            this.platforms.push({x: 0, y: 300, w: 200, h: 150}); // 起點
+            
+            // 謎題1：斷橋
+            this.interactables.push({
+                id: 'plank1', type: 'bridge',
+                x: 180, y: 220, w: 10, h: 80,
+                active: false, hover: false, color: '#8d99ae',
+                targetX: 200, targetY: 300, targetW: 130, targetH: 10
+            });
+
+            this.platforms.push({x: 320, y: 300, w: 180, h: 150}); // 中間
+            
+            // 謎題2：風扇 (位置上移至 190，避免撞頭)
+            this.interactables.push({
+                id: 'fan1', type: 'hazard_toggle',
+                x: 400, y: 190, w: 40, h: 40,
+                active: true, hover: false,
+                rangeX: 350, rangeW: 100, windForce: -3.5
+            });
+
+            this.platforms.push({x: 500, y: 300, w: 50, h: 150}); // 洞左邊
+            this.platforms.push({x: 560, y: 300, w: 240, h: 150}); // 洞右邊
+
+            // 謎題3：人孔蓋
+            this.interactables.push({
+                id: 'manhole', type: 'cover',
+                x: 580, y: 300, w: 60, h: 10,
+                active: false, hover: false,
+                closedX: 500, openX: 560
+            });
+
+            this.platforms.push({x: 800, y: 300, w: 1200, h: 150}); // 終點路
+
+            this.goal = { x: 1000, y: 240, w: 40, h: 60, isOpen: false };
+            this.worldWidth = 1200;
+        }
+
+        setupLevel2() {
+            // Level 2: 高空工地 (引入升降梯)
+            this.worldWidth = 1600;
+            
+            // 起點高台
+            this.platforms.push({x: 0, y: 250, w: 200, h: 300}); 
+            
+            // 謎題1：升降梯 (初始在下面，要點擊升上來)
+            // 玩家走到 x=200 會掉下去，必須升起電梯接住
+            this.interactables.push({
+                id: 'elev1', type: 'elevator',
+                x: 200, y: 400, w: 100, h: 20, // 初始 y=400 (低)
+                minY: 250, maxY: 400,
+                active: false, // false = Down, true = Up
+                speed: 2,
+                hover: false, color: '#e67e22'
+            });
+
+            this.platforms.push({x: 300, y: 250, w: 200, h: 300}); 
+
+            // 謎題2：長距離橋
+            this.interactables.push({
+                id: 'plank2', type: 'bridge',
+                x: 480, y: 150, w: 15, h: 120,
+                active: false, hover: false, color: '#8d99ae',
+                targetX: 500, targetY: 250, targetW: 150, targetH: 10
+            });
+            
+            this.platforms.push({x: 650, y: 250, w: 200, h: 300});
+
+            // 謎題3：風扇阻擋 (需要關閉)
+            this.interactables.push({
+                id: 'fan2', type: 'hazard_toggle',
+                x: 750, y: 150, w: 40, h: 40,
+                active: true, hover: false,
+                rangeX: 700, rangeW: 100, windForce: -3.5
+            });
+
+            this.platforms.push({x: 850, y: 250, w: 750, h: 300}); // 終點路
+
+            this.goal = { x: 1300, y: 190, w: 40, h: 60, isOpen: false };
+        }
+
+        setupLevel3() {
+            // Level 3: 錯綜複雜 (組合技)
+            this.worldWidth = 2000;
+
+            // 起點
+            this.platforms.push({x: 0, y: 300, w: 150, h: 150});
+            
+            // 1. 人孔蓋 (要蓋上)
+            this.interactables.push({
+                id: 'cover3', type: 'cover',
+                x: 230, y: 300, w: 60, h: 10,
+                active: false, closedX: 150, openX: 230
+            });
+            this.platforms.push({x: 210, y: 300, w: 150, h: 150}); // 蓋子後的平台
+
+            // 2. 升降梯 (初始在上面，這次要降下來鋪路！)
+            // 這裡有個大坑
+            this.interactables.push({
+                id: 'elev3', type: 'elevator',
+                x: 360, y: 150, w: 100, h: 20, // 初始在天花板
+                minY: 150, maxY: 300, // maxY 是路面高度
+                active: true, // true = Up (Away), false = Down (Safe)
+                speed: 3,
+                hover: false, color: '#e67e22'
+            });
+
+            this.platforms.push({x: 460, y: 300, w: 150, h: 150});
+
+            // 3. 風扇 + 橋 的組合
+            // 風扇吹著橋的位置，如果不關風扇，人走過去會被吹落
+            this.interactables.push({
+                id: 'fan3', type: 'hazard_toggle',
+                x: 700, y: 180, w: 40, h: 40,
+                active: true, rangeX: 610, rangeW: 150, windForce: -4.0
+            });
+
+            this.platforms.push({x: 610, y: 300, w: 50, h: 150}); // 橋左墩
+
+            this.interactables.push({
+                id: 'plank3', type: 'bridge',
+                x: 640, y: 200, w: 10, h: 100,
+                active: false, targetX: 660, targetY: 300, targetW: 140, targetH: 10
+            });
+
+            this.platforms.push({x: 800, y: 300, w: 800, h: 150}); // 終點
+
+            this.goal = { x: 1200, y: 240, w: 40, h: 60, isOpen: false };
+        }
+
+        hideAllScreens() {
+            const screens = document.querySelectorAll('.screen');
+            screens.forEach(s => s.style.display = 'none');
+        }
+
+        getMousePos(evt) {
+            const rect = this.canvas.getBoundingClientRect();
+            return {
+                x: evt.clientX - rect.left,
+                y: evt.clientY - rect.top
+            };
+        }
+
+        getWorldMousePos() {
+            return {
+                x: this.mouseX + this.camera.x,
+                y: this.mouseY
+            };
+        }
+
+        handleMouseMove(e) {
+            if (this.state !== 'PLAYING') return;
+            const pos = this.getMousePos(e);
+            this.mouseX = pos.x;
+            this.mouseY = pos.y;
+            
+            const worldPos = this.getWorldMousePos();
+            let cursorPointer = false;
+            this.interactables.forEach(obj => {
+                obj.hover = this.checkCollision({x: worldPos.x, y: worldPos.y, w: 1, h: 1}, obj);
+                if (obj.hover) cursorPointer = true;
+            });
+            this.canvas.style.cursor = cursorPointer ? 'pointer' : 'default';
+        }
+
+        handleClick(e) {
+            if (this.state !== 'PLAYING') return;
+            this.interactables.forEach(obj => {
+                if (obj.hover) this.triggerObject(obj);
+            });
+        }
+
+        triggerObject(obj) {
+            if (obj.type === 'bridge') {
+                if (!obj.active) obj.active = true;
+            } else if (obj.type === 'hazard_toggle') {
+                obj.active = !obj.active;
+            } else if (obj.type === 'cover') {
+                obj.active = !obj.active;
+            } else if (obj.type === 'elevator') {
+                obj.active = !obj.active; // 切換上下目標
+            }
+        }
+
+        checkCollision(rect1, rect2) {
+            const r1x = rect1.x;
+            const r1y = rect1.y;
+            const r1w = rect1.w !== undefined ? rect1.w : rect1.width;
+            const r1h = rect1.h !== undefined ? rect1.h : rect1.height;
+            
+            const r2x = rect2.x;
+            const r2y = rect2.y;
+            const r2w = rect2.w !== undefined ? rect2.w : rect2.width;
+            const r2h = rect2.h !== undefined ? rect2.h : rect2.height;
+
+            return (r1x < r2x + r2w && r1x + r1w > r2x && r1y < r2y + r2h && r1y + r1h > r2y);
+        }
+
+        update(dt) {
+            const w = this.walker;
+
+            // 進門動畫
+            if (this.state === 'ENTERING_DOOR') {
+                w.alpha -= 0.02;
+                w.x += w.vx * 0.5;
+                w.animFrame += 0.1;
+                if (w.alpha <= 0) this.gameWin();
+                return;
+            }
+
+            if (this.state !== 'PLAYING') return;
+
+            // 攝影機跟隨
+            let targetCamX = w.x - this.width * 0.35;
+            targetCamX = Math.max(0, targetCamX);
+            targetCamX = Math.min(targetCamX, this.worldWidth - this.width);
+            this.camera.x += (targetCamX - this.camera.x) * 0.1;
+
+            // --- 升降梯移動邏輯 ---
+            this.interactables.forEach(obj => {
+                if (obj.type === 'elevator') {
+                    let targetY = obj.active ? obj.minY : obj.maxY;
+                    let dy = 0;
+                    if (Math.abs(obj.y - targetY) > obj.speed) {
+                        dy = (obj.y < targetY) ? obj.speed : -obj.speed;
+                        obj.y += dy;
+                    } else {
+                        obj.y = targetY;
+                    }
+                    obj.dy = dy; // 記錄速度給主角用
+                }
+            });
+
+            // 1. 物理: 重力
+            w.vy += 0.5;
+            w.y += w.vy;
+
+            // 2. 碰撞檢測 (平台 + 互動地形)
+            w.grounded = false;
+            let onElevator = false; // 是否站在電梯上
+
+            // 收集所有可站立的區域
+            let colliders = [...this.platforms];
+            
+            this.interactables.forEach(obj => {
+                if (obj.type === 'bridge' && obj.active) {
+                    colliders.push({x: obj.targetX, y: obj.targetY, w: obj.targetW, h: obj.targetH});
+                } else if (obj.type === 'cover' && obj.active) {
+                    colliders.push({x: obj.closedX, y: obj.y, w: obj.w, h: obj.h});
+                } else if (obj.type === 'elevator') {
+                    // 電梯是動態平台
+                    colliders.push(obj);
+                }
+            });
+
+            for (let p of colliders) {
+                // 腳底碰撞 (著地)
+                if (w.y + w.height > p.y && w.y + w.height < p.y + p.h + 15 && 
+                    w.x + w.width/2 > p.x && w.x + w.width/2 < p.x + (p.w || p.width)) {
+                    
+                    if (w.vy > 0) {
+                        w.y = p.y - w.height;
+                        w.vy = 0;
+                        w.grounded = true;
+                        
+                        // 特殊處理：如果在電梯上，要跟著動
+                        if (p.type === 'elevator' && p.dy) {
+                            w.y += p.dy; // 修正Y軸
+                            // 如果電梯橫向移動(目前沒有)，也要加 dx
+                            onElevator = true;
+                        }
+                    }
+                }
+                
+                // 側面碰撞 (撞牆)
+                // 稍微縮小判定範圍避免卡腳
+                if (w.y + w.height > p.y + 10 && w.y < p.y + (p.h || p.height) - 10) {
+                     if (w.vx > 0 && w.x + w.width > p.x && w.x < p.x + 20) {
+                         w.vx *= -1; w.facingRight = false;
+                     }
+                     else if (w.vx < 0 && w.x < p.x + (p.w || p.width) && w.x > p.x + (p.w || p.width) - 20) {
+                         w.vx *= -1; w.facingRight = true;
+                     }
+                }
+            }
+
+            // 3. 移動
+            if (w.grounded) {
+                let externalForce = 0;
+                const activeFans = this.interactables.filter(i => i.type === 'hazard_toggle' && i.active);
+                activeFans.forEach(fan => {
+                    if (w.x > fan.rangeX && w.x < fan.rangeX + fan.rangeW && Math.abs(w.y - fan.y) < 120) {
+                        externalForce = fan.windForce;
+                    }
+                });
+                w.x += w.vx + externalForce;
+            } else {
+                w.x += w.vx * 0.5; // 空中慣性
+            }
+
+            // 4. 邊界檢查
+            if (w.x < 0) { w.x = 0; w.vx *= -1; w.facingRight = true;}
+
+            // 5. 終點檢查
+            if (this.goal) {
+                const distToGoal = Math.abs(w.x - this.goal.x);
+                this.goal.isOpen = (distToGoal < 150);
+                if (this.checkCollision(w, this.goal)) {
+                    this.state = 'ENTERING_DOOR';
+                }
+            }
+
+            // 6. 失敗判定
+            if (w.y > this.height + 200) {
+                this.gameOver("夢遊先生掉進無底深淵了！");
+            }
+
+            // 風扇本體碰撞
+            const activeFans = this.interactables.filter(i => i.type === 'hazard_toggle');
+            for(let fan of activeFans) {
+                if (this.checkCollision(w, fan)) {
+                    this.gameOver("夢遊先生被風扇吵醒了！");
+                    break;
+                }
+            }
+
+            if (w.grounded) w.animFrame += 0.1;
+        }
+
+        gameOver(reason) {
+            this.state = 'GAMEOVER';
+            document.getElementById('death-reason').innerText = reason;
+            document.getElementById('gameover-screen').style.display = 'block';
+        }
+
+        gameWin() {
+            if (this.currentLevel < this.maxLevels) {
+                this.state = 'LEVEL_COMPLETE';
+                document.getElementById('level-complete-screen').style.display = 'block';
+            } else {
+                this.state = 'WIN';
+                document.getElementById('victory-screen').style.display = 'block';
+            }
+        }
+
+        loop(time) {
+            const dt = time - this.lastTime;
+            this.lastTime = time;
+            this.update(dt);
+            this.draw();
+            requestAnimationFrame((t) => this.loop(t));
+        }
+
+        draw() {
+            this.ctx.clearRect(0, 0, this.width, this.height);
+
+            // 繪製裝飾
+            this.decorations.forEach(d => {
+                if (d.type === 'star') {
+                    this.ctx.fillStyle = `rgba(255, 255, 255, ${d.alpha})`;
+                    this.ctx.beginPath();
+                    this.ctx.arc(d.x, d.y, d.size, 0, Math.PI*2);
+                    this.ctx.fill();
+                    d.alpha += d.blinkSpeed;
+                    if (d.alpha > 1 || d.alpha < 0.2) d.blinkSpeed *= -1;
+                } else if (d.type === 'moon') {
+                    this.ctx.fillStyle = '#fdfcdc';
+                    this.ctx.beginPath();
+                    this.ctx.arc(d.x, d.y, d.size, 0, Math.PI*2);
+                    this.ctx.fill();
+                    this.ctx.fillStyle = '#1a1a2e';
+                    this.ctx.beginPath();
+                    this.ctx.arc(d.x - 10, d.y - 5, d.size, 0, Math.PI*2);
+                    this.ctx.fill();
+                }
+            });
+
+            this.ctx.save();
+            this.ctx.translate(-this.camera.x, 0);
+
+            // 繪製物件
+            this.interactables.forEach(obj => {
+                this.ctx.save();
+                if (obj.hover) {
+                    this.ctx.shadowBlur = 15;
+                    this.ctx.shadowColor = "#f1c40f";
+                    this.ctx.strokeStyle = "#f1c40f";
+                    this.ctx.lineWidth = 2;
+                } else {
+                    this.ctx.shadowBlur = 0;
+                    this.ctx.strokeStyle = "transparent";
+                }
+
+                if (obj.type === 'bridge') {
+                    this.ctx.fillStyle = obj.color;
+                    if (obj.active) {
+                        this.ctx.fillRect(obj.targetX, obj.targetY, obj.targetW, obj.targetH);
+                        this.ctx.strokeStyle = "#5a5a5a";
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.targetX, obj.targetY+5);
+                        this.ctx.lineTo(obj.targetX+obj.targetW, obj.targetY+5);
+                        this.ctx.stroke();
+                    } else {
+                        this.ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+                    }
+                } else if (obj.type === 'hazard_toggle') {
+                    this.ctx.fillStyle = '#555';
+                    this.ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+                    this.ctx.translate(obj.x + obj.w/2, obj.y + obj.h/2);
+                    if (obj.active) {
+                        this.ctx.rotate(Date.now() / 100);
+                        this.ctx.restore(); this.ctx.save();
+                        // 風
+                        this.ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+                        this.ctx.fillRect(obj.rangeX, obj.y, obj.rangeW, 150);
+                        this.ctx.strokeStyle = "rgba(200, 200, 255, 0.5)";
+                        this.ctx.beginPath();
+                        const offset = (Date.now() / 5) % 20;
+                        this.ctx.moveTo(obj.x - 10 - offset, obj.y + 10);
+                        this.ctx.lineTo(obj.x - 40 - offset, obj.y + 10);
+                        this.ctx.stroke();
+                        this.ctx.translate(obj.x + obj.w/2, obj.y + obj.h/2); 
+                        this.ctx.rotate(Date.now() / 100);
+                    }
+                    this.ctx.fillStyle = '#aaa';
+                    this.ctx.fillRect(-15, -2, 30, 4);
+                    this.ctx.fillRect(-2, -15, 4, 30);
+                } else if (obj.type === 'cover') {
+                    this.ctx.fillStyle = '#7f8c8d';
+                    let drawX = obj.active ? obj.closedX : obj.openX;
+                    this.ctx.fillRect(drawX, obj.y, obj.w, obj.h);
+                    this.ctx.fillStyle = '#333';
+                    this.ctx.fillRect(drawX + 10, obj.y - 5, 40, 5);
+                } else if (obj.type === 'elevator') {
+                    // 升降梯
+                    this.ctx.fillStyle = obj.color;
+                    this.ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+                    // 吊索
+                    this.ctx.strokeStyle = '#555';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(obj.x + obj.w/2, obj.y);
+                    this.ctx.lineTo(obj.x + obj.w/2, -100); // 往上延伸
+                    this.ctx.stroke();
+                    // 警示紋路
+                    this.ctx.fillStyle = '#000';
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(obj.x, obj.y + obj.h);
+                    this.ctx.lineTo(obj.x + 10, obj.y);
+                    this.ctx.lineTo(obj.x + 20, obj.y + obj.h);
+                    this.ctx.fill();
+                }
+
+                if (obj.hover) {
+                    let hRect = {x:obj.x, y:obj.y, w:obj.w, h:obj.h};
+                    if (obj.type === 'bridge' && obj.active) hRect = {x:obj.targetX, y:obj.targetY, w:obj.targetW, h:obj.targetH};
+                    else if (obj.type === 'cover' && obj.active) hRect.x = obj.closedX;
+                    else if (obj.type === 'cover' && !obj.active) hRect.x = obj.openX;
+                    
+                    this.ctx.strokeRect(hRect.x, hRect.y, hRect.w, hRect.h);
+                }
+                this.ctx.restore();
+            });
+
+            // 繪製平台
+            this.ctx.fillStyle = '#2b2d42';
+            this.platforms.forEach(p => {
+                this.ctx.fillRect(p.x, p.y, p.w, p.h);
+                this.ctx.fillStyle = '#1a1a2e';
+                const windows = Math.floor(p.w / 60);
+                for(let i=0; i<windows; i++) {
+                   this.ctx.fillRect(p.x + 20 + i*50, p.y + 30, 20, 30);
+                }
+                this.ctx.fillStyle = '#2b2d42';
+            });
+
+            // 終點
+            if (this.goal) {
+                this.ctx.lineWidth = 3;
+                this.ctx.strokeStyle = '#fff';
+                this.ctx.strokeRect(this.goal.x, this.goal.y, this.goal.w, this.goal.h);
+                
+                this.ctx.fillStyle = '#111'; 
+                this.ctx.fillRect(this.goal.x, this.goal.y, this.goal.w, this.goal.h);
+
+                this.ctx.fillStyle = '#5dade2';
+                if (this.goal.isOpen) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(this.goal.x, this.goal.y);
+                    this.ctx.lineTo(this.goal.x + 10, this.goal.y + 5); 
+                    this.ctx.lineTo(this.goal.x + 10, this.goal.y + this.goal.h - 5); 
+                    this.ctx.lineTo(this.goal.x, this.goal.y + this.goal.h);
+                    this.ctx.fill();
+                } else {
+                    this.ctx.fillRect(this.goal.x, this.goal.y, this.goal.w, this.goal.h);
+                    this.ctx.fillStyle = 'gold';
+                    this.ctx.beginPath();
+                    this.ctx.arc(this.goal.x + 10, this.goal.y + 30, 3, 0, Math.PI*2);
+                    this.ctx.fill();
+                }
+
+                this.ctx.fillStyle = '#fff';
+                this.ctx.font = '12px Arial';
+                this.ctx.fillText("家", this.goal.x + 12, this.goal.y - 10);
+            }
+
+            // 主角
+            if (this.walker) {
+                const w = this.walker;
+                this.ctx.save();
+                this.ctx.translate(w.x + w.width/2, w.y + w.height/2);
+                if (!w.facingRight) this.ctx.scale(-1, 1);
+                
+                this.ctx.globalAlpha = w.alpha;
+
+                this.ctx.fillStyle = '#ecf0f1';
+                this.ctx.fillRect(-10, -15, 20, 30);
+                
+                this.ctx.fillStyle = '#f1c40f';
+                this.ctx.beginPath();
+                this.ctx.arc(0, -20, 10, 0, Math.PI*2);
+                this.ctx.fill();
+
+                this.ctx.fillStyle = '#3498db';
+                this.ctx.beginPath();
+                this.ctx.moveTo(-10, -25);
+                this.ctx.lineTo(10, -25);
+                this.ctx.lineTo(15, -10);
+                this.ctx.lineTo(0, -35);
+                this.ctx.fill();
+                this.ctx.fillStyle = '#ecf0f1';
+                this.ctx.beginPath();
+                this.ctx.arc(15, -10, 3, 0, Math.PI*2);
+                this.ctx.fill();
+
+                this.ctx.strokeStyle = '#ecf0f1';
+                this.ctx.lineWidth = 4;
+                this.ctx.beginPath();
+                this.ctx.moveTo(0, -10);
+                this.ctx.lineTo(15, -10);
+                this.ctx.stroke();
+
+                const legOffset = Math.sin(w.animFrame) * 5;
+                this.ctx.strokeStyle = '#ecf0f1';
+                this.ctx.beginPath();
+                this.ctx.moveTo(-5, 15);
+                this.ctx.lineTo(-5 - legOffset, 25);
+                this.ctx.moveTo(5, 15);
+                this.ctx.lineTo(5 + legOffset, 25);
+                this.ctx.stroke();
+
+                if (Math.floor(Date.now() / 500) % 2 === 0) {
+                    this.ctx.fillStyle = '#fff';
+                    this.ctx.font = '14px Arial';
+                    this.ctx.fillText("Z", 10, -30);
+                    this.ctx.font = '10px Arial';
+                    this.ctx.fillText("z", 18, -35);
+                }
+
+                this.ctx.restore();
+            }
+
+            this.ctx.restore();
+        }
+    }
+
+    const game = new Game();
+
+</script>
+</body>
+</html>
